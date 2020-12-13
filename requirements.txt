@@ -1,0 +1,7 @@
+skyfield
+pytz
+scipy
+python-docx
+pandas
+tqdm
+openpyxl
