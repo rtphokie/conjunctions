@@ -1,0 +1,26 @@
+[project]
+name = "conjunctions"
+version = "0.1.0"
+description = "Find conjunctions of the Moon, planets and bright star clusters using Skyfield"
+readme = "README.md"
+authors = [
+    { name = "trice", email = "rtphokie@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "platformdirs>=4.12.2",
+    "skyfield>=1.55",
+    "timezonefinder>=9.0.0",
+]
+
+[project.scripts]
+conjunctions = "conjunctions:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
