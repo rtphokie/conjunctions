@@ -9,6 +9,16 @@ Star clusters take precedence over bright stars: when a body's conjunction with 
 coincides (within a day) with its conjunction with a cluster lying within the separation
 limit of that star — e.g. Aldebaran in front of the Hyades — only the cluster is reported.
 
+## Install
+
+Requires Python 3.11+.
+
+```sh
+pip install conjunctions
+```
+
+or, from a checkout, with [uv](https://docs.astral.sh/uv/): `uv sync`.
+
 ## Library
 
 ```python

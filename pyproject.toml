@@ -1,17 +1,41 @@
 [project]
 name = "conjunctions"
 version = "0.1.0"
-description = "Find conjunctions of the Moon, planets and bright star clusters using Skyfield"
+description = "Find conjunctions of the Moon, planets, bright stars and star clusters using Skyfield"
 readme = "README.md"
 authors = [
     { name = "trice", email = "rtphokie@gmail.com" }
 ]
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
+keywords = ["astronomy", "conjunction", "planets", "moon", "skyfield", "stargazing", "ephemeris"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Education",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
 dependencies = [
-    "platformdirs>=4.12.2",
+    "numpy>=1.24",
+    "platformdirs>=4.0",
     "skyfield>=1.55",
     "timezonefinder>=9.0.0",
+    # zoneinfo needs an IANA time zone database, which Windows doesn't ship
+    "tzdata; sys_platform == 'win32'",
 ]
+
+[project.urls]
+Homepage = "https://github.com/rtphokie/conjunctions"
+Repository = "https://github.com/rtphokie/conjunctions"
+Issues = "https://github.com/rtphokie/conjunctions/issues"
 
 [project.scripts]
 conjunctions = "conjunctions:main"

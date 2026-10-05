@@ -2,6 +2,7 @@ import argparse
 import json
 import sys
 from datetime import datetime, timezone
+from importlib.metadata import version
 from zoneinfo import ZoneInfo
 
 from .core import cache_dir, data_dir, find_conjunctions, timezone_for
@@ -97,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="output JSON instead of text")
     parser.add_argument("--compact", action="store_true", help="single-line JSON output (implies --json)")
     parser.add_argument("--no-cache", action="store_true", help="recompute even if cached")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {version('conjunctions')}")
     parser.add_argument("--paths", action="store_true", help="print data and cache directories and exit")
     args = parser.parse_args(argv)
 

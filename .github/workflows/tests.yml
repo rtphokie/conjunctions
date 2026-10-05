@@ -1,0 +1,44 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
+    env:
+      CONJUNCTIONS_DATA_DIR: ${{ github.workspace }}/.skyfield-data
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      # de440s.bsp (~32 MB), downloaded on first use
+      - uses: actions/cache@v4
+        with:
+          path: .skyfield-data
+          key: skyfield-data-de440s
+
+      - run: uv sync --locked
+      - run: uv run pytest -q
+
+      - name: Build and smoke-test the wheel
+        shell: bash
+        run: |
+          uv build
+          uvx twine check --strict dist/*
+          uv venv --python ${{ matrix.python }} smoke
+          uv pip install --python smoke dist/*.whl
+          cd "$RUNNER_TEMP"
+          uv run --no-project --python "$GITHUB_WORKSPACE/smoke" conjunctions --version
+          uv run --no-project --python "$GITHUB_WORKSPACE/smoke" conjunctions 2026-10-01 2026-11-01 -p --lat 35.78 --lon -78.64
