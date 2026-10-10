@@ -7,6 +7,10 @@ is the largest pairwise separation among its members.
 
 Positions are geocentric unless an observer location is given, in which case they
 are topocentric and each event gets altitude/azimuth snapshots for viewing.
+
+Oppositions of the superior naked-eye planets (Mars, Jupiter, Saturn) are found
+separately: the moment the planet's geocentric ecliptic longitude is 180 degrees
+from the Sun's.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ import numpy as np
 from platformdirs import site_cache_dir, user_cache_dir
 from skyfield import almanac
 from skyfield.api import Loader, Star, wgs84
+from skyfield.magnitudelib import planetary_magnitude
 from skyfield.searchlib import find_minima
 from timezonefinder import TimezoneFinder
 
@@ -60,6 +65,8 @@ BRIGHT_STARS = {
 }
 
 FIXED_OBJECTS = {**STAR_CLUSTERS, **BRIGHT_STARS}
+# Planets that can reach opposition (outside Earth's orbit)
+OPPOSITION_BODIES = ("Mars", "Jupiter", "Saturn")
 BODY_ORDER = list(MOVING_BODIES) + list(FIXED_OBJECTS)
 
 # Coarse sampling step (days) for minimum search; the Moon moves ~13 deg/day.
@@ -67,6 +74,8 @@ MOON_STEP_DAYS = 0.1
 PLANET_STEP_DAYS = 1.0
 # Pair conjunctions sharing a body within this many days may merge into a group.
 LINK_DAYS = 1.0
+# Closest approach to Earth is searched within +/- this many days of opposition.
+CLOSEST_APPROACH_WINDOW_DAYS = 30.0
 # Visibility search: +/- this many days around closest approach, at this step.
 VIS_WINDOW_DAYS = 1.0
 VIS_STEP_DAYS = 2 / 1440
@@ -151,7 +160,7 @@ class _Sky:
     def __init__(self, latitude: float | None, longitude: float | None, elevation_m: float):
         load = Loader(str(data_dir()), verbose=False)
         self.ts = load.timescale()
-        eph = load(EPHEMERIS)
+        self.eph = eph = load(EPHEMERIS)
         self.earth, self.sun = eph["earth"], eph["sun"]
         self.objects = {name: eph[key] for name, key in MOVING_BODIES.items()}
         self.objects.update(
@@ -213,9 +222,10 @@ class _Sky:
             alt, az, _ = at.observe(self.objects[n]).apparent().altaz(temperature_C=REFRACTION_TEMP_C)
             positions[n] = {"alt_deg": round(alt.degrees, 2), "az_deg": round(az.degrees, 2)}
         sun_alt = at.observe(self.sun).apparent().altaz(temperature_C=REFRACTION_TEMP_C)[0].degrees
-        return {
-            "utc": _iso(t),
-            "separation_deg": round(float(self.spread(names, t)), 4),
+        snap = {"utc": _iso(t)}
+        if len(names) > 1:
+            snap["separation_deg"] = round(float(self.spread(names, t)), 4)
+        return snap | {
             "sun_alt_deg": round(float(sun_alt), 2),
             "all_above_horizon": all(p["alt_deg"] > 0 for p in positions.values()),
             "positions": positions,
@@ -243,6 +253,46 @@ class _Sky:
             return None
         nearest = min(times, key=lambda ti: abs(ti.tt - t.tt))
         return self.ts.tt_jd(nearest.tt + offset_hours / 24)
+
+
+    def oppositions(self, t0, t1):
+        """Opposition events of OPPOSITION_BODIES between ``t0`` and ``t1``."""
+        events = []
+        for name in OPPOSITION_BODIES:
+            body = self.objects[name]
+            f = almanac.oppositions_conjunctions(self.eph, body)
+            times, kinds = almanac.find_discrete(t0, t1, f)
+            for t in times[kinds == 1]:
+                geo = self.earth.at(t).observe(body)
+                event = {
+                    "utc": _iso(t),
+                    "body": name,
+                    "distance_au": round(float(geo.distance().au), 4),
+                    "magnitude": round(float(planetary_magnitude(geo)), 2),
+                    "sun_elongation_deg": round(float(self.sun_elongation([name], t)), 2),
+                    "closest_approach": self.closest_approach(name, t),
+                }
+                if self.topocentric:
+                    event["visibility"] = self.transit(name, t)
+                events.append(event)
+        return events
+
+    def closest_approach(self, name, t):
+        """Time and distance of the planet's minimum distance from Earth near ``t``."""
+        body = self.objects[name]
+        f = lambda t: self.earth.at(t).observe(body).distance().au
+        f.step_days = 1.0
+        w = CLOSEST_APPROACH_WINDOW_DAYS
+        times, dists = find_minima(self.ts.tt_jd(t.tt - w), self.ts.tt_jd(t.tt + w), f)
+        i = int(np.argmin(dists))
+        return {"utc": _iso(times[i]), "distance_au": round(float(dists[i]), 4)}
+
+    def transit(self, name, t):
+        """Snapshot at the planet's meridian transit nearest ``t`` (highest in the sky)."""
+        times = almanac.find_transits(self.observer, self.objects[name],
+                                      self.ts.tt_jd(t.tt - 1), self.ts.tt_jd(t.tt + 1))
+        nearest = min(times, key=lambda ti: abs(ti.tt - t.tt))
+        return {"transit": self.snapshot([name], nearest)}
 
 
 def _fixed_separation(a: str, b: str) -> float:
@@ -361,6 +411,32 @@ def _compute(start, end, max_sep, min_elong, min_bodies, site, min_alt, max_sun_
     return events
 
 
+def _observer(latitude, longitude, elevation_m) -> dict | None:
+    if (latitude is None) != (longitude is None):
+        raise ValueError("latitude and longitude must be given together")
+    if latitude is None:
+        return None
+    return {"latitude": float(latitude), "longitude": float(longitude), "elevation_m": float(elevation_m),
+            "timezone": timezone_for(latitude, longitude)}
+
+
+def _cached(params: dict, key_extra: dict, field: str, compute, use_cache: bool) -> str:
+    """Return cached JSON for ``params``, else ``{**params, field: compute()}`` written to the cache."""
+    key_data = {**params, **key_extra, "version": CACHE_VERSION}
+    key = hashlib.sha256(json.dumps(key_data, sort_keys=True).encode()).hexdigest()[:32]
+    cache_file = cache_dir() / f"{key}.json"
+
+    if use_cache and cache_file.is_file():
+        return cache_file.read_text()
+
+    text = json.dumps({**params, field: compute()}, indent=2)
+    fd, tmp = tempfile.mkstemp(dir=cache_file.parent, suffix=".tmp")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    os.replace(tmp, cache_file)
+    return text
+
+
 def find_conjunctions(
     start: str | date | datetime | None = None,
     end: str | date | datetime | None = None,
@@ -393,20 +469,13 @@ def find_conjunctions(
 
     Results are cached on disk keyed by the arguments.
     """
-    if (latitude is None) != (longitude is None):
-        raise ValueError("latitude and longitude must be given together")
     if min_bodies < 2:
         raise ValueError("min_bodies must be at least 2")
+    observer = _observer(latitude, longitude, elevation_m)
     start_dt, end_dt = _default_range(start, end)
     if end_dt <= start_dt:
         raise ValueError("end must be after start")
 
-    observer = (
-        {"latitude": float(latitude), "longitude": float(longitude), "elevation_m": float(elevation_m),
-         "timezone": timezone_for(latitude, longitude)}
-        if latitude is not None
-        else None
-    )
     params = {
         "start": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "end": end_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -419,20 +488,48 @@ def find_conjunctions(
         "planets_only": bool(planets_only),
         "ephemeris": EPHEMERIS,
     }
-    key_data = {**params, "bodies": MOVING_BODIES, "fixed": FIXED_OBJECTS, "version": CACHE_VERSION}
-    key = hashlib.sha256(json.dumps(key_data, sort_keys=True).encode()).hexdigest()[:32]
-    cache_file = cache_dir() / f"{key}.json"
-
-    if use_cache and cache_file.is_file():
-        return cache_file.read_text()
-
     site = (latitude, longitude, elevation_m)
-    conjunctions = _compute(start_dt, end_dt, max_separation_deg, min_sun_elongation_deg,
-                            min_bodies, site, min_altitude_deg, max_sun_altitude_deg, planets_only)
-    text = json.dumps({**params, "conjunctions": conjunctions}, indent=2)
+    compute = lambda: _compute(start_dt, end_dt, max_separation_deg, min_sun_elongation_deg,
+                               min_bodies, site, min_altitude_deg, max_sun_altitude_deg, planets_only)
+    return _cached(params, {"bodies": MOVING_BODIES, "fixed": FIXED_OBJECTS}, "conjunctions", compute, use_cache)
 
-    fd, tmp = tempfile.mkstemp(dir=cache_file.parent, suffix=".tmp")
-    with os.fdopen(fd, "w") as f:
-        f.write(text)
-    os.replace(tmp, cache_file)
-    return text
+
+def find_oppositions(
+    start: str | date | datetime | None = None,
+    end: str | date | datetime | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    elevation_m: float = 0.0,
+    use_cache: bool = True,
+) -> str:
+    """Return JSON listing oppositions of Mars, Jupiter and Saturn between ``start`` and ``end``.
+
+    ``start`` defaults to today (UTC) and ``end`` to one year after ``start``.
+    Each event gives the UTC time of opposition (geocentric ecliptic longitude
+    180 degrees from the Sun), the planet's distance (AU), visual magnitude and
+    elongation from the Sun, and its closest approach to Earth (which for Mars
+    can be days from opposition).
+
+    With ``latitude``/``longitude`` each event gets a ``visibility`` block with an
+    alt/az snapshot at the meridian transit nearest opposition.
+
+    Results are cached on disk keyed by the arguments.
+    """
+    observer = _observer(latitude, longitude, elevation_m)
+    start_dt, end_dt = _default_range(start, end)
+    if end_dt <= start_dt:
+        raise ValueError("end must be after start")
+
+    params = {
+        "start": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "end": end_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "observer": observer,
+        "ephemeris": EPHEMERIS,
+    }
+
+    def compute():
+        sky = _Sky(latitude, longitude, elevation_m)
+        events = sky.oppositions(sky.ts.from_datetime(start_dt), sky.ts.from_datetime(end_dt))
+        return sorted(events, key=lambda ev: ev["utc"])
+
+    return _cached(params, {"kind": "oppositions", "bodies": OPPOSITION_BODIES}, "oppositions", compute, use_cache)

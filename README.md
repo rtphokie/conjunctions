@@ -3,7 +3,7 @@
 Finds conjunctions (closest apparent angular separation, geocentric or from an observer location) between the Moon,
 the naked-eye planets (Mercury, Venus, Mars, Jupiter, Saturn), bright star clusters
 (Pleiades, Hyades, Beehive, M35) and bright stars near the ecliptic (Aldebaran, Pollux,
-Castor, Regulus, Spica, Antares).
+Castor, Regulus, Spica, Antares). It can also list oppositions of Mars, Jupiter and Saturn.
 
 Star clusters take precedence over bright stars: when a body's conjunction with a star
 coincides (within a day) with its conjunction with a cluster lying within the separation
@@ -47,6 +47,21 @@ The output's `observer` includes the location's time zone (offline lookup via
 - `best` – which of the above to use (`closest_visible`, else whichever twilight snapshot
   has everything above the horizon; `null` if not visible)
 
+### Oppositions
+
+```python
+from conjunctions import find_oppositions
+
+print(find_oppositions("2026-01-01", "2028-01-01", latitude=35.78, longitude=-78.64))
+```
+
+Returns a JSON string; each entry in `oppositions` has `utc` (the moment the planet's
+geocentric ecliptic longitude is 180° from the Sun's), `body`, `distance_au`, `magnitude`,
+`sun_elongation_deg` and `closest_approach` (`utc`, `distance_au`). Closest approach to
+Earth can differ from opposition by days, notably for Mars. With `latitude`/`longitude`,
+each entry gets `visibility.transit`: an alt/az snapshot at the meridian transit nearest
+opposition, when the planet is highest. `start`/`end` default as for `find_conjunctions`.
+
 ## CLI
 
 ```
@@ -55,6 +70,7 @@ conjunctions --lat 35.78 --lon -78.64            # next 12 months, local times f
 conjunctions -p --lat 35.78 --lon -78.64         # Moon and planets only (no stars/clusters)
 conjunctions 2026-10-01 2026-11-01 --lat 35.78 --lon -78.64 --tz UTC
 conjunctions 2026-01-01 2027-01-01 -n 3 --lat 35.78 --lon -78.64 --min-alt 10 -v
+conjunctions -o --lat 35.78 --lon -78.64         # oppositions of Mars, Jupiter, Saturn
 conjunctions --paths                            # show data and cache directories
 ```
 

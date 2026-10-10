@@ -200,3 +200,44 @@ def test_prefer_clusters_unit():
     assert [p for p in pairs if p is not pairs[1]] == kept
     # With a tight limit Aldebaran no longer counts as "near" the Hyades centre.
     assert _prefer_clusters(pairs, 1.0) == pairs
+
+
+def test_oppositions():
+    from conjunctions import find_oppositions
+    events = json.loads(find_oppositions("2026-01-01", "2028-01-01"))["oppositions"]
+    assert [(e["body"], e["utc"][:10]) for e in events] == [
+        ("Jupiter", "2026-01-10"),
+        ("Saturn", "2026-10-04"),
+        ("Jupiter", "2027-02-11"),
+        ("Mars", "2027-02-19"),
+        ("Saturn", "2027-10-18"),
+    ]
+    for ev in events:
+        assert ev["sun_elongation_deg"] > 170
+        assert "visibility" not in ev
+        closest = ev["closest_approach"]
+        assert closest["distance_au"] <= ev["distance_au"]
+        assert abs(_utc(closest["utc"]) - _utc(ev["utc"])) < timedelta(days=10)
+    mars = next(e for e in events if e["body"] == "Mars")
+    assert 0.6 < mars["distance_au"] < 0.7
+    assert -1.5 < mars["magnitude"] < -1.0
+    assert mars["closest_approach"]["utc"].startswith("2027-02-20")
+
+
+def test_oppositions_topocentric():
+    from conjunctions import find_oppositions
+    data = json.loads(find_oppositions("2026-09-01", "2026-11-01", **RALEIGH))
+    assert data["observer"]["timezone"] == "America/New_York"
+    (saturn,) = data["oppositions"]
+    transit = saturn["visibility"]["transit"]
+    assert abs(_utc(transit["utc"]) - _utc(saturn["utc"])) < timedelta(days=1)
+    assert transit["all_above_horizon"] and transit["sun_alt_deg"] < -18
+    assert abs(transit["positions"]["Saturn"]["az_deg"] - 180) < 1
+
+
+def test_oppositions_invalid_arguments():
+    from conjunctions import find_oppositions
+    with pytest.raises(ValueError):
+        find_oppositions("2026-10-02", "2026-10-01")
+    with pytest.raises(ValueError):
+        find_oppositions(latitude=35.0)

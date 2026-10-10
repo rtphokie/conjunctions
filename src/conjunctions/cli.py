@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from importlib.metadata import version
 from zoneinfo import ZoneInfo
 
-from .core import cache_dir, data_dir, find_conjunctions, timezone_for
+from .core import cache_dir, data_dir, find_conjunctions, find_oppositions, timezone_for
 
 COMPASS = "N NNE NE ENE E ESE SE SSE S SSW SW WSW W WNW NW NNW".split()
 
@@ -25,10 +25,8 @@ def _time(utc: str, tz) -> str:
 
 def _snapshot_lines(label: str, snap: dict, tz, indent: str) -> list[str]:
     width = max(len(n) for n in snap["positions"])
-    lines = [
-        f"{indent}{label}: {_time(snap['utc'], tz)}  sep {snap['separation_deg']:.2f}°"
-        f"  sun alt {snap['sun_alt_deg']:+.0f}°"
-    ]
+    sep = f"  sep {snap['separation_deg']:.2f}°" if "separation_deg" in snap else ""
+    lines = [f"{indent}{label}: {_time(snap['utc'], tz)}{sep}  sun alt {snap['sun_alt_deg']:+.0f}°"]
     for name, p in snap["positions"].items():
         direction = COMPASS[round(p["az_deg"] / 22.5) % 16]
         lines.append(
@@ -37,17 +35,31 @@ def _snapshot_lines(label: str, snap: dict, tz, indent: str) -> list[str]:
     return lines
 
 
+def _observer_line(obs: dict | None) -> str:
+    if not obs:
+        return "Geocentric positions (give --lat/--lon for alt/az and viewing times)"
+    lat, lon = obs["latitude"], obs["longitude"]
+    return (f"Observer {abs(lat):.3f}°{'N' if lat >= 0 else 'S'} {abs(lon):.3f}°{'E' if lon >= 0 else 'W'}"
+            f" {obs['elevation_m']:.0f} m ({obs['timezone']})")
+
+
+def format_oppositions(data: dict, tz) -> str:
+    lines = [_observer_line(data["observer"]),
+             f"{data['start']} to {data['end']}, {len(data['oppositions'])} opposition(s)"]
+    for ev in data["oppositions"]:
+        closest = ev["closest_approach"]
+        lines.append("")
+        lines.append(f"{_time(ev['utc'], tz)}  {ev['body']} at opposition  mag {ev['magnitude']:+.1f}"
+                     f"  {ev['distance_au']:.3f} AU")
+        lines.append(f"  closest to Earth: {_time(closest['utc'], tz)}  {closest['distance_au']:.3f} AU")
+        vis = ev.get("visibility")
+        if vis:
+            lines += _snapshot_lines("highest (meridian transit)", vis["transit"], tz, "  ")
+    return "\n".join(lines)
+
+
 def format_text(data: dict, tz, verbose: bool = False) -> str:
-    lines = []
-    obs = data["observer"]
-    if obs:
-        lat, lon = obs["latitude"], obs["longitude"]
-        lines.append(
-            f"Observer {abs(lat):.3f}°{'N' if lat >= 0 else 'S'} {abs(lon):.3f}°{'E' if lon >= 0 else 'W'}"
-            f" {obs['elevation_m']:.0f} m ({obs['timezone']})"
-        )
-    else:
-        lines.append("Geocentric positions (give --lat/--lon for alt/az and viewing times)")
+    lines = [_observer_line(data["observer"])]
     lines.append(f"{data['start']} to {data['end']}, max separation {data['max_separation_deg']}°, "
                  f"{len(data['conjunctions'])} conjunction(s)")
 
@@ -73,7 +85,8 @@ def format_text(data: dict, tz, verbose: bool = False) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="conjunctions",
-        description="Find conjunctions of the Moon, naked-eye planets, bright stars and star clusters.",
+        description="Find conjunctions of the Moon, naked-eye planets, bright stars and star clusters, "
+                    "or oppositions of Mars, Jupiter and Saturn.",
     )
     parser.add_argument("start", nargs="?", help="start date/time, ISO 8601 (UTC if no offset); default today")
     parser.add_argument("end", nargs="?", help="end date/time, ISO 8601; default one year after start")
@@ -85,6 +98,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="minimum number of bodies in a conjunction (default: 2)")
     parser.add_argument("-p", "--planets-only", action="store_true",
                         help="only the Moon and naked-eye planets (skip stars and clusters)")
+    parser.add_argument("-o", "--oppositions", action="store_true",
+                        help="list oppositions of Mars, Jupiter and Saturn instead of conjunctions")
     parser.add_argument("--lat", type=float, help="observer latitude in degrees (north positive)")
     parser.add_argument("--lon", type=float, help="observer longitude in degrees (east positive)")
     parser.add_argument("--elevation", type=float, default=0.0, help="observer elevation in metres")
@@ -114,17 +129,23 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"unknown time zone: {tz_name}")
 
     try:
-        text = find_conjunctions(
-            args.start, args.end, args.max_sep, args.min_elongation, args.min_bodies,
-            args.lat, args.lon, args.elevation, args.min_alt, args.max_sun_alt,
-            planets_only=args.planets_only,
-            use_cache=not args.no_cache,
-        )
+        if args.oppositions:
+            text = find_oppositions(args.start, args.end, args.lat, args.lon, args.elevation,
+                                    use_cache=not args.no_cache)
+        else:
+            text = find_conjunctions(
+                args.start, args.end, args.max_sep, args.min_elongation, args.min_bodies,
+                args.lat, args.lon, args.elevation, args.min_alt, args.max_sun_alt,
+                planets_only=args.planets_only,
+                use_cache=not args.no_cache,
+            )
     except ValueError as exc:
         parser.error(str(exc))
 
     if args.compact:
         text = json.dumps(json.loads(text), separators=(",", ":"))
+    elif args.oppositions and not args.json:
+        text = format_oppositions(json.loads(text), tz)
     elif not args.json:
         text = format_text(json.loads(text), tz, args.verbose)
     sys.stdout.write(text + "\n")

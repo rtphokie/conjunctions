@@ -82,3 +82,18 @@ def test_paths(capsys, isolated_cache):
     main(["--paths"])
     data = json.loads(capsys.readouterr().out)
     assert data["cache_dir"] == str(isolated_cache)
+
+
+def test_oppositions_flag(capsys):
+    main(["2026-09-01", "2026-11-01", "-o", "--lat", "35.78", "--lon", "-78.64"])
+    out = capsys.readouterr().out
+    assert "1 opposition(s)" in out
+    assert "Saturn at opposition" in out
+    assert "closest to Earth" in out
+    assert "meridian transit" in out
+
+
+def test_oppositions_json(capsys):
+    main(["2027-01-01", "2027-03-01", "-o", "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert [e["body"] for e in data["oppositions"]] == ["Jupiter", "Mars"]
